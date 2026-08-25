@@ -43,14 +43,16 @@ def find_ppk2_candidate_ports() -> List[str]:
 def probe_port(port: str, timeout: float = 0.5) -> Optional[Dict[str, Any]]:
     """
     Probe a serial port to verify if it responds with valid PPK2 metadata.
-    Returns metadata dict if valid PPK2 data port, or None.
+    Drains buffer and checks for genuine PPK2 measurement hardware identifier (HW).
     """
     try:
+        from .core import init_ppk2_connection
         ppk = PPK2_API(port, timeout=timeout)
-        modifiers = ppk.get_modifiers()
+        init_ppk2_connection(ppk)
         modifiers_copy = dict(ppk.modifiers) if hasattr(ppk, "modifiers") else {}
         ppk.ser.close()
-        if modifiers:
+        # Verify genuine PPK2 measurement interface (distinguishes from pass-through UART COM port)
+        if modifiers_copy.get("HW") is not None or modifiers_copy.get("Calibrated") is not None:
             return modifiers_copy
     except Exception:
         pass
