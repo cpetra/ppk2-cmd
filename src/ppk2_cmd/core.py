@@ -5,10 +5,63 @@ Core measurement session and acquisition engine for PPK2.
 import time
 from typing import Optional, List, Tuple
 import numpy as np
-from ppk2_api.ppk2_api import PPK2_API, PPK2_MP
+from ppk2_api.ppk2_api import PPK2_API, PPK2_MP, PPK2_Command, PPK2_Modes
 
 from .discovery import get_active_ppk2_port
 from .analysis import MeasurementResult
+
+
+def init_ppk2_connection(ppk: PPK2_API):
+    """
+    Safely initialize serial communication:
+    Stops any leftover streaming and drains serial buffer before reading metadata.
+    """
+    try:
+        ppk._write_serial((PPK2_Command.AVERAGE_STOP,))
+        time.sleep(0.05)
+        while ppk.ser.in_waiting > 0:
+            ppk.ser.read(ppk.ser.in_waiting)
+            time.sleep(0.02)
+    except Exception:
+        pass
+    ppk.get_modifiers()
+
+
+def set_power(
+    port: Optional[str] = None,
+    state: str = "on",
+    voltage_mv: int = 5000
+):
+    """
+    Control PPK2 power output independently without running a measurement.
+    Leaves the power on or off on the hardware and closes the serial port.
+    """
+    active_port = get_active_ppk2_port(port)
+    if not active_port:
+        raise RuntimeError("No active PPK2 device found.")
+
+    print(f"Connecting to PPK2 on '{active_port}'...")
+    ppk = PPK2_API(active_port, timeout=1.0)
+    try:
+        init_ppk2_connection(ppk)
+        if state.lower() == "on":
+            print(f"Configuring Source Meter at {voltage_mv} mV ({voltage_mv/1000:.2f}V)...")
+            ppk.use_source_meter()
+            time.sleep(0.05)
+            ppk.set_source_voltage(voltage_mv)
+            time.sleep(0.1)
+            print("Turning DUT power ON...")
+            ppk.toggle_DUT_power("ON")
+            time.sleep(0.1)
+            print(f"DUT power is now ON at {voltage_mv} mV (persists after exit).")
+        else:
+            print("Turning DUT power OFF...")
+            ppk.toggle_DUT_power("OFF")
+            time.sleep(0.1)
+            print("DUT power is now OFF.")
+    finally:
+        if ppk and hasattr(ppk, "ser") and ppk.ser and ppk.ser.is_open:
+            ppk.ser.close()
 
 
 class PPK2Session:
@@ -21,6 +74,8 @@ class PPK2Session:
         mode: str = "source",
         voltage_mv: int = 5000,
         dut_power: bool = True,
+        preserve_power: bool = False,
+        leave_power_on: bool = False,
         use_mp: bool = False,
         timeout: float = 1.0
     ):
@@ -30,6 +85,8 @@ class PPK2Session:
         self.mode = mode
         self.voltage_mv = voltage_mv
         self.dut_power = dut_power
+        self.preserve_power = preserve_power
+        self.leave_power_on = leave_power_on
         self.use_mp = use_mp
         self.timeout = timeout
         self._ppk = None
@@ -48,8 +105,8 @@ class PPK2Session:
         cls = PPK2_MP if self.use_mp else PPK2_API
         self._ppk = cls(self.port, timeout=self.timeout)
 
-        # Read calibration
-        self._ppk.get_modifiers()
+        # Initialize connection and drain leftover buffer
+        init_ppk2_connection(self._ppk)
 
         # Configure mode & voltage
         if self.mode == "source":
@@ -57,7 +114,8 @@ class PPK2Session:
             time.sleep(0.05)
             self._ppk.set_source_voltage(self.voltage_mv)
             time.sleep(0.1)
-            if self.dut_power:
+            # If power is already running and preserve_power is True, do not re-trigger power toggle
+            if self.dut_power and not self.preserve_power:
                 self._ppk.toggle_DUT_power("ON")
                 time.sleep(0.2)
         else:
@@ -100,7 +158,6 @@ class PPK2Session:
         current_ma = current_ua / 1000.0
         t = np.linspace(0, elapsed, len(current_ua), endpoint=False)
 
-        # Parse digital channels if any captured
         channels = None
         if raw_digital and hasattr(self._ppk, "digital_channels"):
             try:
@@ -131,7 +188,7 @@ class PPK2Session:
         )
 
     def stop_measuring(self):
-        """Stop sampling and safely turn off DUT power."""
+        """Stop sampling and optionally turn off DUT power."""
         if self._measuring and self._ppk:
             try:
                 self._ppk.stop_measuring()
@@ -139,7 +196,7 @@ class PPK2Session:
                 pass
             self._measuring = False
 
-        if self.mode == "source" and self.dut_power and self._ppk:
+        if self.mode == "source" and self.dut_power and not self.leave_power_on and self._ppk:
             try:
                 self._ppk.toggle_DUT_power("OFF")
             except Exception:
@@ -166,7 +223,6 @@ def generate_mock_measurement(
     num_samples = int(duration_s * 100_000)
     t = np.linspace(0, duration_s, num_samples, endpoint=False)
     
-    # Base active current + periodic pulses
     base_ma = 18.5 + np.random.normal(0, 0.3, num_samples)
     pulses = (np.sin(2 * np.pi * 0.2 * t) > 0.8) * (35.0 + np.random.normal(0, 1.2, num_samples))
     startup = np.exp(-t * 2) * 40.0
@@ -200,6 +256,8 @@ def measure(
     voltage_mv: int = 5000,
     duration_s: float = 10.0,
     wait_before_s: float = 0.0,
+    preserve_power: bool = False,
+    leave_power_on: bool = False,
     use_mp: bool = False,
     dut_power: bool = True,
     mock: bool = False
@@ -213,6 +271,8 @@ def measure(
         mode=mode,
         voltage_mv=voltage_mv,
         dut_power=dut_power,
+        preserve_power=preserve_power,
+        leave_power_on=leave_power_on,
         use_mp=use_mp
     ) as session:
         return session.sample(duration_s=duration_s, wait_before_s=wait_before_s)
