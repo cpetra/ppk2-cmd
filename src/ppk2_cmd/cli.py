@@ -8,7 +8,7 @@ import sys
 from dotenv import load_dotenv
 
 from .discovery import find_ppk2_candidate_ports, probe_port, print_wsl2_help, get_active_ppk2_port
-from .core import measure, set_power
+from .core import measure
 
 # Load .env file
 load_dotenv()
@@ -45,26 +45,6 @@ def cmd_list(args):
         print_wsl2_help()
 
 
-def cmd_power_on(args):
-    """Turn PPK2 power output ON and exit (leaves power running)."""
-    try:
-        set_power(port=args.port, state="on", voltage_mv=args.voltage)
-    except RuntimeError as e:
-        print(f"Error: {e}")
-        print_wsl2_help()
-        sys.exit(1)
-
-
-def cmd_power_off(args):
-    """Turn PPK2 power output OFF and exit."""
-    try:
-        set_power(port=args.port, state="off")
-    except RuntimeError as e:
-        print(f"Error: {e}")
-        print_wsl2_help()
-        sys.exit(1)
-
-
 def cmd_measure(args):
     """Perform a measurement session."""
     try:
@@ -74,8 +54,6 @@ def cmd_measure(args):
             voltage_mv=args.voltage,
             duration_s=args.duration,
             wait_before_s=args.wait,
-            preserve_power=args.preserve_power,
-            leave_power_on=args.leave_power_on,
             use_mp=args.mp,
             dut_power=not args.no_dut_power,
             mock=args.mock
@@ -101,9 +79,6 @@ def cmd_measure(args):
 
 
 def build_parser() -> argparse.ArgumentParser:
-    default_port = os.environ.get("PPK2_PORT")
-    default_voltage = int(os.environ.get("PPK2_VOLTAGE", 5000))
-
     parser = argparse.ArgumentParser(
         prog="ppk2-cmd",
         description="Command-line tool and Python API for Nordic Power Profiler Kit II (PPK2)"
@@ -115,38 +90,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser_list = subparsers.add_parser("list", help="Scan and list connected PPK2 devices")
     parser_list.set_defaults(func=cmd_list)
 
-    # Subcommand: on (Turn power ON and exit)
-    parser_on = subparsers.add_parser("on", help="Turn DUT power ON and exit (keeps power running)")
-    parser_on.add_argument("-p", "--port", type=str, default=default_port, help="Serial port")
-    parser_on.add_argument("-v", "--voltage", type=int, default=default_voltage,
-                           help=f"Voltage in mV. Default: {default_voltage}")
-    parser_on.set_defaults(func=cmd_power_on)
-
-    # Subcommand: off (Turn power OFF and exit)
-    parser_off = subparsers.add_parser("off", help="Turn DUT power OFF and exit")
-    parser_off.add_argument("-p", "--port", type=str, default=default_port, help="Serial port")
-    parser_off.set_defaults(func=cmd_power_off)
-
-    # Subcommand: power (power on / power off)
-    parser_power = subparsers.add_parser("power", help="Control DUT power (power on / power off)")
-    parser_power_sub = parser_power.add_subparsers(dest="power_action", required=True)
-    
-    p_on = parser_power_sub.add_parser("on", help="Turn DUT power ON and exit")
-    p_on.add_argument("-p", "--port", type=str, default=default_port, help="Serial port")
-    p_on.add_argument("-v", "--voltage", type=int, default=default_voltage,
-                      help=f"Voltage in mV. Default: {default_voltage}")
-    p_on.set_defaults(func=cmd_power_on)
-
-    p_off = parser_power_sub.add_parser("off", help="Turn DUT power OFF and exit")
-    p_off.add_argument("-p", "--port", type=str, default=default_port, help="Serial port")
-    p_off.set_defaults(func=cmd_power_off)
-
     # Subcommand: measure (default)
     parser_measure = subparsers.add_parser("measure", help="Measure power consumption")
     _add_measure_args(parser_measure)
     parser_measure.set_defaults(func=cmd_measure)
 
-    # Also add arguments directly to top-level parser for convenience
+    # Also add arguments directly to top-level parser for convenience (e.g. `ppk2-cmd --duration 10`)
     _add_measure_args(parser)
     parser.set_defaults(func=cmd_measure)
 
@@ -166,13 +115,9 @@ def _add_measure_args(p: argparse.ArgumentParser):
     p.add_argument("-d", "--duration", type=float, default=default_duration,
                    help=f"Sampling duration in seconds. Default: {default_duration}")
     p.add_argument("-w", "--wait", type=float, default=0.0,
-                   help="Wait/warm-up time before measurement in seconds. Default: 0.0")
+                   help="Warm-up / delay time in seconds before sampling starts (DUT is powered during this wait). Default: 0.0")
     p.add_argument("-m", "--mode", choices=["source", "ampere"], default=default_mode,
-                   help=f"Operating mode: 'source' or 'ampere'. Default: {default_mode}")
-    p.add_argument("--preserve-power", "--no-power-cycle", dest="preserve_power", action="store_true",
-                   help="Preserve existing power state (do not power cycle DUT before measuring)")
-    p.add_argument("--leave-power-on", "--keep-power-on", dest="leave_power_on", action="store_true",
-                   help="Leave DUT power ON after measurement finishes")
+                   help=f"Operating mode: 'source' (power DUT internally) or 'ampere'. Default: {default_mode}")
     p.add_argument("--no-dut-power", action="store_true",
                    help="Do not toggle DUT power on in source mode")
     p.add_argument("--summary-only", action="store_true",

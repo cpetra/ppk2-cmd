@@ -3,9 +3,9 @@ Core measurement session and acquisition engine for PPK2.
 """
 
 import time
-from typing import Optional, List, Tuple
+from typing import Optional, List
 import numpy as np
-from ppk2_api.ppk2_api import PPK2_API, PPK2_MP, PPK2_Command, PPK2_Modes
+from ppk2_api.ppk2_api import PPK2_API, PPK2_MP, PPK2_Command
 
 from .discovery import get_active_ppk2_port
 from .analysis import MeasurementResult
@@ -27,43 +27,6 @@ def init_ppk2_connection(ppk: PPK2_API):
     ppk.get_modifiers()
 
 
-def set_power(
-    port: Optional[str] = None,
-    state: str = "on",
-    voltage_mv: int = 5000
-):
-    """
-    Control PPK2 power output independently without running a measurement.
-    Leaves the power on or off on the hardware and closes the serial port.
-    """
-    active_port = get_active_ppk2_port(port)
-    if not active_port:
-        raise RuntimeError("No active PPK2 device found.")
-
-    print(f"Connecting to PPK2 on '{active_port}'...")
-    ppk = PPK2_API(active_port, timeout=1.0)
-    try:
-        init_ppk2_connection(ppk)
-        if state.lower() == "on":
-            print(f"Configuring Source Meter at {voltage_mv} mV ({voltage_mv/1000:.2f}V)...")
-            ppk.use_source_meter()
-            time.sleep(0.05)
-            ppk.set_source_voltage(voltage_mv)
-            time.sleep(0.1)
-            print("Turning DUT power ON...")
-            ppk.toggle_DUT_power("ON")
-            time.sleep(0.1)
-            print(f"DUT power is now ON at {voltage_mv} mV (persists after exit).")
-        else:
-            print("Turning DUT power OFF...")
-            ppk.toggle_DUT_power("OFF")
-            time.sleep(0.1)
-            print("DUT power is now OFF.")
-    finally:
-        if ppk and hasattr(ppk, "ser") and ppk.ser and ppk.ser.is_open:
-            ppk.ser.close()
-
-
 class PPK2Session:
     """
     Manages a connected PPK2 device session with context manager support.
@@ -74,8 +37,6 @@ class PPK2Session:
         mode: str = "source",
         voltage_mv: int = 5000,
         dut_power: bool = True,
-        preserve_power: bool = False,
-        leave_power_on: bool = False,
         use_mp: bool = False,
         timeout: float = 1.0
     ):
@@ -85,8 +46,6 @@ class PPK2Session:
         self.mode = mode
         self.voltage_mv = voltage_mv
         self.dut_power = dut_power
-        self.preserve_power = preserve_power
-        self.leave_power_on = leave_power_on
         self.use_mp = use_mp
         self.timeout = timeout
         self._ppk = None
@@ -114,8 +73,7 @@ class PPK2Session:
             time.sleep(0.05)
             self._ppk.set_source_voltage(self.voltage_mv)
             time.sleep(0.1)
-            # If power is already running and preserve_power is True, do not re-trigger power toggle
-            if self.dut_power and not self.preserve_power:
+            if self.dut_power:
                 self._ppk.toggle_DUT_power("ON")
                 time.sleep(0.2)
         else:
@@ -130,8 +88,12 @@ class PPK2Session:
             raise RuntimeError("PPK2 is not connected.")
 
         if wait_before_s > 0:
-            print(f"Waiting {wait_before_s:.1f}s before sampling...")
-            time.sleep(wait_before_s)
+            print(f"Waiting {wait_before_s:.1f}s before sampling (DUT powered at {self.voltage_mv} mV)...")
+            remaining = wait_before_s
+            while remaining > 0:
+                step = min(1.0, remaining)
+                time.sleep(step)
+                remaining -= step
 
         print(f"Sampling for {duration_s:.1f} seconds (~{int(duration_s * 100_000):,} samples)...")
         self._ppk.start_measuring()
@@ -188,7 +150,7 @@ class PPK2Session:
         )
 
     def stop_measuring(self):
-        """Stop sampling and optionally turn off DUT power."""
+        """Stop sampling and safely turn off DUT power."""
         if self._measuring and self._ppk:
             try:
                 self._ppk.stop_measuring()
@@ -196,14 +158,14 @@ class PPK2Session:
                 pass
             self._measuring = False
 
-        if self.mode == "source" and self.dut_power and not self.leave_power_on and self._ppk:
+        if self.mode == "source" and self.dut_power and self._ppk:
             try:
                 self._ppk.toggle_DUT_power("OFF")
             except Exception:
                 pass
 
     def close(self):
-        """Cleanly close PPK2 session."""
+        """Cleanly close PPK2 session and ensure power is off."""
         self.stop_measuring()
         if self._ppk and hasattr(self._ppk, "ser") and self._ppk.ser and self._ppk.ser.is_open:
             try:
@@ -215,9 +177,14 @@ class PPK2Session:
 
 def generate_mock_measurement(
     voltage_mv: int = 5000,
-    duration_s: float = 10.0
+    duration_s: float = 10.0,
+    wait_before_s: float = 0.0
 ) -> MeasurementResult:
     """Generate synthetic PPK2 measurement data for testing without hardware."""
+    if wait_before_s > 0:
+        print(f"Waiting {wait_before_s:.1f}s before sampling (mock mode)...")
+        time.sleep(min(1.0, wait_before_s))
+
     print(f"\n--- Running Mock Simulation ({duration_s:.1f}s @ {voltage_mv}mV) ---")
     time.sleep(0.3)
     num_samples = int(duration_s * 100_000)
@@ -256,23 +223,23 @@ def measure(
     voltage_mv: int = 5000,
     duration_s: float = 10.0,
     wait_before_s: float = 0.0,
-    preserve_power: bool = False,
-    leave_power_on: bool = False,
     use_mp: bool = False,
     dut_power: bool = True,
     mock: bool = False
 ) -> MeasurementResult:
     """High-level function to measure power profile."""
     if mock:
-        return generate_mock_measurement(voltage_mv=voltage_mv, duration_s=duration_s)
+        return generate_mock_measurement(
+            voltage_mv=voltage_mv,
+            duration_s=duration_s,
+            wait_before_s=wait_before_s
+        )
 
     with PPK2Session(
         port=port,
         mode=mode,
         voltage_mv=voltage_mv,
         dut_power=dut_power,
-        preserve_power=preserve_power,
-        leave_power_on=leave_power_on,
         use_mp=use_mp
     ) as session:
         return session.sample(duration_s=duration_s, wait_before_s=wait_before_s)

@@ -5,19 +5,19 @@
 
 Command-line tool and Python library for the **Nordic Semiconductor Power Profiler Kit II (PPK2)**. 
 
-Captures continuous, high-resolution current and power samples at **~100,000 samples/sec (100 kSps)** with automatic port discovery, WSL2 support, persistent power control, tabular per-second metrics, data export, and waveform plotting.
+Captures continuous, high-resolution current and power samples at **~100,000 samples/sec (100 kSps)** with automatic port discovery, WSL2 support, warm-up delay support, tabular per-second metrics, data export, and waveform plotting.
 
 ---
 
 ## Features
 
 - **Smart Auto-Discovery & `.env` Support**: Automatically finds and probes the active PPK2 measurement interface (handles dual CDC ACM ports on WSL2, Linux, and Windows), or configure once in `.env` for instant connection.
-- **Standalone Power Control**: Turn DUT power ON at a configured voltage and exit the CLI while the hardware keeps power running continuously.
+- **Warm-Up / Boot Delay (`--wait`)**: Turn on power and allow your target board to boot or stabilize before recording measurements.
 - **Flexible CLI**: Measure with custom voltage, duration, pre-sampling wait delays, and mode selection (Source Meter / Ampere Meter).
 - **Per-Second Breakdown**: Displays average current (µA / mA) and power (mW) for each second of capture.
 - **Data Exporting**: Export raw samples to compressed `.npz` (NumPy), `.csv`, or `.json` summary stats.
 - **High-Res Plotting**: Generates publication-quality waveforms with rolling averages and power consumption graphs.
-- **Clean Python API**: Use `measure()`, `set_power()`, or `with PPK2Session() as ppk:` in your own scripts.
+- **Clean Python API**: Use `measure()` or `with PPK2Session() as ppk:` in your own scripts and test benches.
 - **Mock Simulation Mode**: Test test benches and data pipelines even when physical hardware is not connected.
 
 ---
@@ -40,27 +40,12 @@ pip install -e .
 
 ## Command-Line Usage
 
-### 1. Standalone Power Control (Persistent Power)
-
-You can turn the power ON and exit the app without cutting power to your target board:
-
-```bash
-# Turn power ON at 5.0V and exit (power stays ON):
-ppk2-cmd on --voltage 5000
-
-# Later, measure without power-cycling the DUT:
-ppk2-cmd --duration 10 --preserve-power --leave-power-on
-
-# Turn power OFF when done:
-ppk2-cmd off
-```
-
-### 2. Discover Connected Devices
+### 1. Discover Connected Devices
 ```bash
 ppk2-cmd list
 ```
 
-### 3. Measure Power Profile
+### 2. Measure Power Profile
 ```bash
 # 10-second measurement at 5.0V (default):
 ppk2-cmd
@@ -68,14 +53,14 @@ ppk2-cmd
 # Custom duration and voltage (e.g., 30s @ 3.3V):
 ppk2-cmd --duration 30 --voltage 3300
 
-# Pre-measurement wait/warm-up delay (e.g., wait 5s, sample 30s):
-ppk2-cmd --duration 30 --voltage 5000 --wait 5.0
+# Power DUT, wait 5s for board to boot, then sample for 30s:
+ppk2-cmd --voltage 5000 --wait 5.0 --duration 30
 
 # Ampere meter mode (external power supplied to DUT):
 ppk2-cmd --mode ampere --voltage 3300 --duration 10.0
 ```
 
-### 4. Save Waveform Plot and Export Data
+### 3. Save Waveform Plot and Export Data
 ```bash
 # Save high-resolution chart (ppk2_plot.png):
 ppk2-cmd --duration 10 --plot
@@ -84,7 +69,7 @@ ppk2-cmd --duration 10 --plot
 ppk2-cmd --duration 10 --plot power_chart.png --npz samples.npz --csv samples.csv --json stats.json
 ```
 
-### 5. Mock / Simulation Test (No hardware connected)
+### 4. Mock / Simulation Test (No hardware connected)
 ```bash
 ppk2-cmd --mock --duration 5 --plot mock_chart.png
 ```
@@ -95,15 +80,11 @@ ppk2-cmd --mock --duration 5 --plot mock_chart.png
 
 | Option | Description | Default |
 |---|---|---|
-| `on`, `power on` | Subcommand: Turn DUT power ON at voltage and exit | — |
-| `off`, `power off` | Subcommand: Turn DUT power OFF and exit | — |
 | `-d`, `--duration` | Sampling duration in seconds | `10.0` |
 | `-v`, `--voltage` | Output voltage in mV (`800` to `5000`) | `5000` (5.0V) |
-| `-w`, `--wait` | Pre-measurement delay in seconds | `0.0` |
+| `-w`, `--wait` | Warm-up / delay time in seconds before sampling starts (DUT is powered) | `0.0` |
 | `-m`, `--mode` | `source` (internal power) or `ampere` (external power) | `source` |
 | `-p`, `--port` | Explicit serial port | Auto-probed (or `.env`) |
-| `--preserve-power` | Preserve existing power state (do not power cycle DUT) | `False` |
-| `--leave-power-on` | Keep DUT power ON after measurement completes | `False` |
 | `--summary-only` | Show only overall summary instead of per-second breakdown | `False` |
 | `--plot [FILE.png]` | Generate waveform & power plot | `ppk2_plot.png` |
 | `--npz FILE.npz` | Export raw numpy sample arrays | None |
@@ -117,31 +98,34 @@ ppk2-cmd --mock --duration 5 --plot mock_chart.png
 ## Python API Usage
 
 ```python
-from ppk2_cmd import measure, set_power, PPK2Session
+from ppk2_cmd import measure
 
-# 1. Turn power ON independently
-set_power(voltage_mv=5000, state="on")
-
-# 2. Measure without power-cycling the DUT, leaving power ON afterwards
+# Power DUT, wait 5.0s for stabilization, sample for 10.0s at 5.0V
 result = measure(
     voltage_mv=5000,
-    duration_s=10.0,
-    preserve_power=True,
-    leave_power_on=True
+    wait_before_s=5.0,
+    duration_s=10.0
 )
 
-# Print per-second stats
+# Access all ~1,000,000 raw samples
+print(f"Total samples:   {len(result.current_ma):,}")
+print(f"Average current: {result.mean_ua / 1000:.3f} mA")
+print(f"Average power:   {result.avg_power_mw:.3f} mW")
+
+# Display per-second breakdown table
 result.print_per_second()
 
-# 3. Turn power OFF when finished
-set_power(state="off")
+# Export data and plot
+result.plot("waveform.png")
+result.save_npz("raw_samples.npz")
+result.save_csv("raw_samples.csv")
 ```
 
 ---
 
 ## Environment Variables (`.env`)
 
-Create a `.env` file in your working directory to set defaults:
+Create a `.env` file in your working directory to customize default settings:
 
 ```ini
 PPK2_PORT=/dev/ttyACM0
