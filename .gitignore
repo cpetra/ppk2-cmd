@@ -11,3 +11,5 @@ build/
 *.png
 *.json
 .DS_Store
+.env
+!.env.example

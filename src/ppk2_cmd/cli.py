@@ -3,13 +3,23 @@ Command-line interface for ppk2-cmd.
 """
 
 import argparse
+import os
 import sys
-from .discovery import find_ppk2_candidate_ports, probe_port, print_wsl2_help
+from dotenv import load_dotenv
+
+from .discovery import find_ppk2_candidate_ports, probe_port, print_wsl2_help, get_active_ppk2_port
 from .core import measure
+
+# Load .env file
+load_dotenv()
 
 
 def cmd_list(args):
     """Scan and list connected PPK2 devices."""
+    configured_port = os.environ.get("PPK2_PORT")
+    if configured_port:
+        print(f"Configured in .env (PPK2_PORT): {configured_port}")
+
     print("Scanning for connected PPK2 devices...")
     candidates = find_ppk2_candidate_ports()
     if not candidates:
@@ -22,7 +32,8 @@ def cmd_list(args):
         meta = probe_port(port)
         if meta is not None:
             found += 1
-            print(f"  [ACTIVE PPK2] Port: {port}")
+            is_env = " (matches .env)" if port == configured_port else ""
+            print(f"  [ACTIVE PPK2] Port: {port}{is_env}")
             cal = meta.get("Calibrated", "Unknown")
             hw = meta.get("HW", "Unknown")
             print(f"                Hardware: {hw} | Calibrated: {cal}")
@@ -92,15 +103,21 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _add_measure_args(p: argparse.ArgumentParser):
-    p.add_argument("-p", "--port", type=str, help="Serial port (e.g. /dev/ttyACM0, COM3)")
-    p.add_argument("-v", "--voltage", type=int, default=5000,
-                   help="Voltage in mV (800 to 5000 mV). Default: 5000 (5.0V)")
-    p.add_argument("-d", "--duration", type=float, default=10.0,
-                   help="Sampling duration in seconds. Default: 10.0")
+    default_port = os.environ.get("PPK2_PORT")
+    default_voltage = int(os.environ.get("PPK2_VOLTAGE", 5000))
+    default_duration = float(os.environ.get("PPK2_DURATION", 10.0))
+    default_mode = os.environ.get("PPK2_MODE", "source")
+
+    p.add_argument("-p", "--port", type=str, default=default_port,
+                   help=f"Serial port (default: {default_port or 'Auto-probe'})")
+    p.add_argument("-v", "--voltage", type=int, default=default_voltage,
+                   help=f"Voltage in mV (800 to 5000 mV). Default: {default_voltage}")
+    p.add_argument("-d", "--duration", type=float, default=default_duration,
+                   help=f"Sampling duration in seconds. Default: {default_duration}")
     p.add_argument("-w", "--wait", type=float, default=0.0,
                    help="Wait/warm-up time before measurement in seconds. Default: 0.0")
-    p.add_argument("-m", "--mode", choices=["source", "ampere"], default="source",
-                   help="Operating mode: 'source' (power DUT) or 'ampere'. Default: source")
+    p.add_argument("-m", "--mode", choices=["source", "ampere"], default=default_mode,
+                   help=f"Operating mode: 'source' or 'ampere'. Default: {default_mode}")
     p.add_argument("--no-dut-power", action="store_true",
                    help="Do not toggle DUT power on in source mode")
     p.add_argument("--summary-only", action="store_true",

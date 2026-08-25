@@ -1,12 +1,16 @@
 """
-Device discovery and port probing for Nordic Power Profiler Kit II.
+Device discovery, port probing, and environment configuration for PPK2.
 """
 
 import glob
 import os
 import serial.tools.list_ports
 from typing import Optional, List, Dict, Any
+from dotenv import load_dotenv
 from ppk2_api.ppk2_api import PPK2_API
+
+# Load .env file automatically if present in current working directory or parents
+load_dotenv()
 
 
 def find_ppk2_candidate_ports() -> List[str]:
@@ -56,11 +60,21 @@ def probe_port(port: str, timeout: float = 0.5) -> Optional[Dict[str, Any]]:
 def get_active_ppk2_port(user_port: Optional[str] = None) -> Optional[str]:
     """
     Locate and return the active PPK2 communication port.
-    If multiple ports exist (e.g. /dev/ttyACM0 and /dev/ttyACM1), probes each.
+    Priority:
+      1. Explicit argument passed by user (CLI --port or Python function param)
+      2. Environment variable PPK2_PORT (e.g. from .env file)
+      3. Auto-probing candidate ports
     """
+    # 1. Explicit user parameter
     if user_port:
         return user_port
 
+    # 2. Environment variable (.env or shell)
+    env_port = os.environ.get("PPK2_PORT")
+    if env_port and env_port.strip():
+        return env_port.strip()
+
+    # 3. Auto-probe
     candidates = find_ppk2_candidate_ports()
     if not candidates:
         return None
@@ -68,12 +82,10 @@ def get_active_ppk2_port(user_port: Optional[str] = None) -> Optional[str]:
     if len(candidates) == 1:
         return candidates[0]
 
-    # Probe candidates to find active PPK2 data port
     for candidate in sorted(candidates):
         if probe_port(candidate) is not None:
             return candidate
 
-    # Fallback to first candidate
     return candidates[0]
 
 
@@ -95,6 +107,9 @@ def print_wsl2_help():
     print("3. In WSL2, verify the serial port:")
     print("     ls -l /dev/ttyACM*")
     print("     sudo chmod 666 /dev/ttyACM0")
+    print()
+    print("4. Set your port in .env to skip auto-discovery:")
+    print("     echo 'PPK2_PORT=/dev/ttyACM0' > .env")
     print()
     print("Tip: Test without hardware using: ppk2-cmd --mock")
     print("=" * 70)
