@@ -1,0 +1,27 @@
+[project]
+name = "ppk2-cmd"
+version = "0.1.0"
+description = "Command-line tool and Python API for Nordic Power Profiler Kit II (PPK2)"
+readme = "README.md"
+authors = [
+    { name = "Constantin Petra", email = "constantin.petra@gmail.com" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "ppk2-api>=0.9.2",
+    "numpy>=1.24.0",
+    "matplotlib>=3.7.0",
+]
+
+[project.scripts]
+ppk2-cmd = "ppk2_cmd.cli:main"
+ppk2 = "ppk2_cmd.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.12.3,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
