@@ -124,9 +124,9 @@ class PPK2Session:
         print(f"Sampling for {duration_s:.1f} seconds ({rate_info})...\n")
 
         if live_stream:
-            print("=" * 68)
+            print("=" * 70)
             print(f"  LIVE MEASUREMENTS ({self.voltage_mv/1000:.1f}V)")
-            print("=" * 68)
+            print("=" * 70)
 
         self._ppk.start_measuring()
         self._measuring = True
@@ -134,6 +134,7 @@ class PPK2Session:
         samples: List[float] = []
         raw_digital: List[int] = []
         start_time = time.time()
+        
         last_reported_sec = 0
         last_sec_sample_idx = 0
         last_ui_update = 0.0
@@ -154,11 +155,11 @@ class PPK2Session:
                 cur_elapsed = now - start_time
                 cur_sec = int(cur_elapsed)
 
-                # Output completed second summary immediately
+                # Output completed second summary when clock passes a full second
                 if live_stream and cur_sec > last_reported_sec and len(samples) > 0:
                     for s_num in range(last_reported_sec + 1, cur_sec + 1):
-                        approx_samples_per_sec = len(samples) / cur_elapsed
-                        s_idx_end = min(len(samples), int(s_num * approx_samples_per_sec))
+                        s_idx_end = int(len(samples) * (s_num / cur_elapsed)) if cur_elapsed > 0 else len(samples)
+                        s_idx_end = min(len(samples), max(last_sec_sample_idx + 1, s_idx_end))
                         sec_slice = samples[last_sec_sample_idx:s_idx_end]
                         if len(sec_slice) > 0:
                             s_mean_ua = float(np.mean(sec_slice))
@@ -174,13 +175,13 @@ class PPK2Session:
 
                 # Live in-place status line between second marks
                 if now - last_ui_update >= 0.08:
-                    cur_rate = len(samples) / cur_elapsed if cur_elapsed > 0 else 0.0
+                    cur_rate_sps = len(samples) / cur_elapsed if cur_elapsed > 0 else 0.0
                     cur_mean_ma = (sum(samples) / len(samples) / 1000.0) if samples else 0.0
                     cur_power_mw = cur_mean_ma * (self.voltage_mv / 1000.0)
                     pct = min(1.0, cur_elapsed / duration_s) if duration_s > 0 else 1.0
                     sys.stdout.write(
                         f"\r  -> [{cur_elapsed:4.1f}s / {duration_s:4.1f}s ({pct*100:4.1f}%)] "
-                        f"Live: {live_ma:7.3f} mA | Avg: {cur_mean_ma:7.3f} mA | {cur_power_mw:7.3f} mW | {cur_rate/1000:4.1f} kSps"
+                        f"Live: {live_ma:7.3f} mA | Avg: {cur_mean_ma:7.3f} mA | {cur_power_mw:7.3f} mW | {cur_rate_sps/1000:5.1f} kSps"
                     )
                     sys.stdout.flush()
                     last_ui_update = now
