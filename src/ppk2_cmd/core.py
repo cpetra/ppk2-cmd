@@ -2,6 +2,7 @@
 Core measurement session and acquisition engine for PPK2.
 """
 
+import sys
 import time
 from typing import Optional, List
 import numpy as np
@@ -25,6 +26,14 @@ def init_ppk2_connection(ppk: PPK2_API):
     except Exception:
         pass
     ppk.get_modifiers()
+
+
+def _format_progress_bar(elapsed: float, total: float, rate_sps: float, current_ma: float, bar_len: int = 24) -> str:
+    """Format a single-line live terminal progress bar."""
+    pct = min(1.0, max(0.0, elapsed / total)) if total > 0 else 1.0
+    filled = int(bar_len * pct)
+    bar = "=" * filled + (">" if filled < bar_len else "") + " " * (bar_len - filled - (1 if filled < bar_len else 0))
+    return f"\r  [{bar}] {elapsed:5.1f}s / {total:5.1f}s ({pct*100:4.1f}%) | {rate_sps/1000:5.1f} kSps | Live: {current_ma:7.3f} mA"
 
 
 class PPK2Session:
@@ -82,39 +91,64 @@ class PPK2Session:
 
     def sample(self, duration_s: float = 10.0, wait_before_s: float = 0.0) -> MeasurementResult:
         """
-        Record continuous samples for duration_s seconds at ~100 kSps.
+        Record continuous samples for duration_s seconds at ~100 kSps with live progress.
+        Gracefully handles Ctrl+C (KeyboardInterrupt).
         """
         if not self._ppk:
             raise RuntimeError("PPK2 is not connected.")
 
         if wait_before_s > 0:
-            print(f"Waiting {wait_before_s:.1f}s before sampling (DUT powered at {self.voltage_mv} mV)...")
-            remaining = wait_before_s
-            while remaining > 0:
-                step = min(1.0, remaining)
-                time.sleep(step)
-                remaining -= step
+            print(f"Warm-up wait: {wait_before_s:.1f}s before sampling (DUT powered at {self.voltage_mv} mV)...")
+            t_wait_start = time.time()
+            while (time.time() - t_wait_start) < wait_before_s:
+                w_elapsed = time.time() - t_wait_start
+                w_rem = max(0.0, wait_before_s - w_elapsed)
+                sys.stdout.write(f"\r  Warm-up: {w_elapsed:4.1f}s / {wait_before_s:4.1f}s (Remaining: {w_rem:4.1f}s)...")
+                sys.stdout.flush()
+                time.sleep(0.1)
+            sys.stdout.write("\r" + " " * 65 + "\r")
+            sys.stdout.flush()
 
-        print(f"Sampling for {duration_s:.1f} seconds (~{int(duration_s * 100_000):,} samples)...")
+        print(f"Sampling for {duration_s:.1f} seconds (~{int(duration_s * 100_000):,} samples expected)...")
         self._ppk.start_measuring()
         self._measuring = True
 
         samples: List[float] = []
         raw_digital: List[int] = []
         start_time = time.time()
+        last_ui_update = 0.0
+        live_ma = 0.0
 
-        while (time.time() - start_time) < duration_s:
-            data = self._ppk.get_data()
-            if data:
-                raw, bits = self._ppk.get_samples(data)
-                if raw:
-                    samples.extend(raw)
-                if bits:
-                    raw_digital.extend(bits)
-            time.sleep(0.005)
+        try:
+            while (time.time() - start_time) < duration_s:
+                data = self._ppk.get_data()
+                if data:
+                    raw, bits = self._ppk.get_samples(data)
+                    if raw:
+                        samples.extend(raw)
+                        live_ma = raw[-1] / 1000.0
+                    if bits:
+                        raw_digital.extend(bits)
+
+                now = time.time()
+                if now - last_ui_update >= 0.1:
+                    cur_elapsed = now - start_time
+                    rate = len(samples) / cur_elapsed if cur_elapsed > 0 else 0.0
+                    sys.stdout.write(_format_progress_bar(cur_elapsed, duration_s, rate, live_ma))
+                    sys.stdout.flush()
+                    last_ui_update = now
+
+                time.sleep(0.005)
+
+        except KeyboardInterrupt:
+            print("\n  [!] Measurement interrupted by user (Ctrl+C). Processing captured samples...")
 
         elapsed = time.time() - start_time
         self.stop_measuring()
+
+        # Clear progress line
+        sys.stdout.write("\r" + " " * 75 + "\r")
+        sys.stdout.flush()
 
         current_ua = np.array(samples, dtype=np.float64)
         current_ma = current_ua / 1000.0
@@ -127,7 +161,7 @@ class PPK2Session:
             except Exception:
                 pass
 
-        sps = len(current_ua) / elapsed if elapsed > 0 else 0
+        sps = len(current_ua) / elapsed if elapsed > 0 else 0.0
         mean_ua = float(np.mean(current_ua)) if len(current_ua) > 0 else 0.0
         min_ua = float(np.min(current_ua)) if len(current_ua) > 0 else 0.0
         max_ua = float(np.max(current_ua)) if len(current_ua) > 0 else 0.0

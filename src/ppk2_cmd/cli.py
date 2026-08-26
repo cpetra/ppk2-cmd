@@ -58,6 +58,9 @@ def cmd_measure(args):
             dut_power=not args.no_dut_power,
             mock=args.mock
         )
+    except KeyboardInterrupt:
+        print("\nOperation cancelled by user.")
+        sys.exit(0)
     except RuntimeError as e:
         print(f"Error: {e}")
         print_wsl2_help()
@@ -112,10 +115,10 @@ def _add_measure_args(p: argparse.ArgumentParser):
                    help=f"Serial port (default: {default_port or 'Auto-probe'})")
     p.add_argument("-v", "--voltage", type=int, default=default_voltage,
                    help=f"Voltage in mV (800 to 5000 mV). Default: {default_voltage}")
-    p.add_argument("-d", "--duration", type=float, default=default_duration,
+    p.add_argument("-d", "--duration", "--d", type=float, default=default_duration,
                    help=f"Sampling duration in seconds. Default: {default_duration}")
     p.add_argument("-w", "--wait", type=float, default=0.0,
-                   help="Warm-up / delay time in seconds before sampling starts (DUT is powered during this wait). Default: 0.0")
+                   help="Warm-up / delay time in seconds before sampling starts (DUT is powered). Default: 0.0")
     p.add_argument("-m", "--mode", choices=["source", "ampere"], default=default_mode,
                    help=f"Operating mode: 'source' (power DUT internally) or 'ampere'. Default: {default_mode}")
     p.add_argument("--no-dut-power", action="store_true",
