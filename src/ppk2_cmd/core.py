@@ -28,12 +28,17 @@ def init_ppk2_connection(ppk: PPK2_API):
     ppk.get_modifiers()
 
 
-def _format_progress_bar(elapsed: float, total: float, rate_sps: float, current_ma: float, bar_len: int = 24) -> str:
-    """Format a single-line live terminal progress bar."""
-    pct = min(1.0, max(0.0, elapsed / total)) if total > 0 else 1.0
-    filled = int(bar_len * pct)
-    bar = "=" * filled + (">" if filled < bar_len else "") + " " * (bar_len - filled - (1 if filled < bar_len else 0))
-    return f"\r  [{bar}] {elapsed:5.1f}s / {total:5.1f}s ({pct*100:4.1f}%) | {rate_sps/1000:5.1f} kSps | Live: {current_ma:7.3f} mA"
+def downsample_array(arr: np.ndarray, target_sps: int, native_sps: float) -> np.ndarray:
+    """Downsample an array to target_sps using block-averaging."""
+    if target_sps >= native_sps or len(arr) == 0:
+        return arr
+    factor = int(round(native_sps / target_sps))
+    if factor <= 1:
+        return arr
+    trim_len = len(arr) - (len(arr) % factor)
+    if trim_len == 0:
+        return arr
+    return arr[:trim_len].reshape(-1, factor).mean(axis=1)
 
 
 class PPK2Session:
@@ -89,10 +94,16 @@ class PPK2Session:
             self._ppk.use_ampere_meter()
             self._ppk.set_source_voltage(self.voltage_mv)
 
-    def sample(self, duration_s: float = 10.0, wait_before_s: float = 0.0) -> MeasurementResult:
+    def sample(
+        self,
+        duration_s: float = 10.0,
+        wait_before_s: float = 0.0,
+        target_sps: Optional[int] = None,
+        live_stream: bool = True
+    ) -> MeasurementResult:
         """
-        Record continuous samples for duration_s seconds at ~100 kSps with live progress.
-        Gracefully handles Ctrl+C (KeyboardInterrupt).
+        Record continuous samples for duration_s seconds with live second-by-second updates.
+        Supports software downsampling via target_sps.
         """
         if not self._ppk:
             raise RuntimeError("PPK2 is not connected.")
@@ -109,13 +120,22 @@ class PPK2Session:
             sys.stdout.write("\r" + " " * 65 + "\r")
             sys.stdout.flush()
 
-        print(f"Sampling for {duration_s:.1f} seconds (~{int(duration_s * 100_000):,} samples expected)...")
+        rate_info = f"at target {target_sps:,} SPS" if target_sps else "at native ~100 kSPS"
+        print(f"Sampling for {duration_s:.1f} seconds ({rate_info})...\n")
+
+        if live_stream:
+            print("=" * 68)
+            print(f"  LIVE MEASUREMENTS ({self.voltage_mv/1000:.1f}V)")
+            print("=" * 68)
+
         self._ppk.start_measuring()
         self._measuring = True
 
         samples: List[float] = []
         raw_digital: List[int] = []
         start_time = time.time()
+        last_reported_sec = 0
+        last_sec_sample_idx = 0
         last_ui_update = 0.0
         live_ma = 0.0
 
@@ -131,26 +151,63 @@ class PPK2Session:
                         raw_digital.extend(bits)
 
                 now = time.time()
-                if now - last_ui_update >= 0.1:
-                    cur_elapsed = now - start_time
-                    rate = len(samples) / cur_elapsed if cur_elapsed > 0 else 0.0
-                    sys.stdout.write(_format_progress_bar(cur_elapsed, duration_s, rate, live_ma))
+                cur_elapsed = now - start_time
+                cur_sec = int(cur_elapsed)
+
+                # Output completed second summary immediately
+                if live_stream and cur_sec > last_reported_sec and len(samples) > 0:
+                    for s_num in range(last_reported_sec + 1, cur_sec + 1):
+                        approx_samples_per_sec = len(samples) / cur_elapsed
+                        s_idx_end = min(len(samples), int(s_num * approx_samples_per_sec))
+                        sec_slice = samples[last_sec_sample_idx:s_idx_end]
+                        if len(sec_slice) > 0:
+                            s_mean_ua = float(np.mean(sec_slice))
+                            s_mean_ma = s_mean_ua / 1000.0
+                            s_power_mw = s_mean_ma * (self.voltage_mv / 1000.0)
+                            sys.stdout.write(
+                                f"\r  [Second {s_num:2d} | t={s_num-1:2d}.0s-{s_num:2d}.0s]  "
+                                f"{s_mean_ua:10.2f} µA  ({s_mean_ma:8.3f} mA)  |  {s_power_mw:8.3f} mW\n"
+                            )
+                            sys.stdout.flush()
+                            last_sec_sample_idx = s_idx_end
+                    last_reported_sec = cur_sec
+
+                # Live in-place status line between second marks
+                if now - last_ui_update >= 0.08:
+                    cur_rate = len(samples) / cur_elapsed if cur_elapsed > 0 else 0.0
+                    cur_mean_ma = (sum(samples) / len(samples) / 1000.0) if samples else 0.0
+                    cur_power_mw = cur_mean_ma * (self.voltage_mv / 1000.0)
+                    pct = min(1.0, cur_elapsed / duration_s) if duration_s > 0 else 1.0
+                    sys.stdout.write(
+                        f"\r  -> [{cur_elapsed:4.1f}s / {duration_s:4.1f}s ({pct*100:4.1f}%)] "
+                        f"Live: {live_ma:7.3f} mA | Avg: {cur_mean_ma:7.3f} mA | {cur_power_mw:7.3f} mW | {cur_rate/1000:4.1f} kSps"
+                    )
                     sys.stdout.flush()
                     last_ui_update = now
 
                 time.sleep(0.005)
 
         except KeyboardInterrupt:
-            print("\n  [!] Measurement interrupted by user (Ctrl+C). Processing captured samples...")
+            print("\n\n  [!] Measurement interrupted by user (Ctrl+C). Processing captured samples...")
 
         elapsed = time.time() - start_time
         self.stop_measuring()
 
-        # Clear progress line
-        sys.stdout.write("\r" + " " * 75 + "\r")
+        # Clear active status line
+        sys.stdout.write("\r" + " " * 85 + "\r")
         sys.stdout.flush()
 
-        current_ua = np.array(samples, dtype=np.float64)
+        raw_samples_ua = np.array(samples, dtype=np.float64)
+        native_sps = len(raw_samples_ua) / elapsed if elapsed > 0 else 0.0
+
+        # Apply downsampling if target_sps requested
+        if target_sps and target_sps < native_sps:
+            current_ua = downsample_array(raw_samples_ua, target_sps, native_sps)
+            effective_sps = float(target_sps)
+        else:
+            current_ua = raw_samples_ua
+            effective_sps = native_sps
+
         current_ma = current_ua / 1000.0
         t = np.linspace(0, elapsed, len(current_ua), endpoint=False)
 
@@ -161,11 +218,10 @@ class PPK2Session:
             except Exception:
                 pass
 
-        sps = len(current_ua) / elapsed if elapsed > 0 else 0.0
-        mean_ua = float(np.mean(current_ua)) if len(current_ua) > 0 else 0.0
-        min_ua = float(np.min(current_ua)) if len(current_ua) > 0 else 0.0
-        max_ua = float(np.max(current_ua)) if len(current_ua) > 0 else 0.0
-        std_ua = float(np.std(current_ua)) if len(current_ua) > 0 else 0.0
+        mean_ua = float(np.mean(raw_samples_ua)) if len(raw_samples_ua) > 0 else 0.0
+        min_ua = float(np.min(raw_samples_ua)) if len(raw_samples_ua) > 0 else 0.0
+        max_ua = float(np.max(raw_samples_ua)) if len(raw_samples_ua) > 0 else 0.0
+        std_ua = float(np.std(raw_samples_ua)) if len(raw_samples_ua) > 0 else 0.0
         avg_power_mw = (mean_ua / 1000.0) * (self.voltage_mv / 1000.0)
 
         return MeasurementResult(
@@ -174,7 +230,7 @@ class PPK2Session:
             current_ma=current_ma,
             voltage_mv=self.voltage_mv,
             duration_s=elapsed,
-            sample_rate_sps=sps,
+            sample_rate_sps=effective_sps,
             mean_ua=mean_ua,
             min_ua=min_ua,
             max_ua=max_ua,
@@ -212,18 +268,20 @@ class PPK2Session:
 def generate_mock_measurement(
     voltage_mv: int = 5000,
     duration_s: float = 10.0,
-    wait_before_s: float = 0.0
+    wait_before_s: float = 0.0,
+    target_sps: Optional[int] = None
 ) -> MeasurementResult:
     """Generate synthetic PPK2 measurement data for testing without hardware."""
     if wait_before_s > 0:
         print(f"Waiting {wait_before_s:.1f}s before sampling (mock mode)...")
         time.sleep(min(1.0, wait_before_s))
 
-    print(f"\n--- Running Mock Simulation ({duration_s:.1f}s @ {voltage_mv}mV) ---")
+    effective_sps = float(target_sps) if target_sps and target_sps < 100_000 else 100_000.0
+    num_samples = int(duration_s * effective_sps)
+    print(f"\n--- Running Mock Simulation ({duration_s:.1f}s @ {voltage_mv}mV, {effective_sps:,.0f} SPS) ---")
     time.sleep(0.3)
-    num_samples = int(duration_s * 100_000)
+
     t = np.linspace(0, duration_s, num_samples, endpoint=False)
-    
     base_ma = 18.5 + np.random.normal(0, 0.3, num_samples)
     pulses = (np.sin(2 * np.pi * 0.2 * t) > 0.8) * (35.0 + np.random.normal(0, 1.2, num_samples))
     startup = np.exp(-t * 2) * 40.0
@@ -242,7 +300,7 @@ def generate_mock_measurement(
         current_ma=current_ma,
         voltage_mv=voltage_mv,
         duration_s=duration_s,
-        sample_rate_sps=100_000.0,
+        sample_rate_sps=effective_sps,
         mean_ua=mean_ua,
         min_ua=min_ua,
         max_ua=max_ua,
@@ -257,6 +315,8 @@ def measure(
     voltage_mv: int = 5000,
     duration_s: float = 10.0,
     wait_before_s: float = 0.0,
+    target_sps: Optional[int] = None,
+    live_stream: bool = True,
     use_mp: bool = False,
     dut_power: bool = True,
     mock: bool = False
@@ -266,7 +326,8 @@ def measure(
         return generate_mock_measurement(
             voltage_mv=voltage_mv,
             duration_s=duration_s,
-            wait_before_s=wait_before_s
+            wait_before_s=wait_before_s,
+            target_sps=target_sps
         )
 
     with PPK2Session(
@@ -276,4 +337,9 @@ def measure(
         dut_power=dut_power,
         use_mp=use_mp
     ) as session:
-        return session.sample(duration_s=duration_s, wait_before_s=wait_before_s)
+        return session.sample(
+            duration_s=duration_s,
+            wait_before_s=wait_before_s,
+            target_sps=target_sps,
+            live_stream=live_stream
+        )

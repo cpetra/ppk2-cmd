@@ -54,6 +54,8 @@ def cmd_measure(args):
             voltage_mv=args.voltage,
             duration_s=args.duration,
             wait_before_s=args.wait,
+            target_sps=args.sps,
+            live_stream=not args.no_live,
             use_mp=args.mp,
             dut_power=not args.no_dut_power,
             mock=args.mock
@@ -66,10 +68,8 @@ def cmd_measure(args):
         print_wsl2_help()
         sys.exit(1)
 
-    if args.summary_only:
-        res.print_summary()
-    else:
-        res.print_per_second()
+    # Print final summary table
+    res.print_summary()
 
     if args.csv:
         res.save_csv(args.csv)
@@ -98,7 +98,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_measure_args(parser_measure)
     parser_measure.set_defaults(func=cmd_measure)
 
-    # Also add arguments directly to top-level parser for convenience (e.g. `ppk2-cmd --duration 10`)
+    # Also add arguments directly to top-level parser for convenience
     _add_measure_args(parser)
     parser.set_defaults(func=cmd_measure)
 
@@ -110,6 +110,8 @@ def _add_measure_args(p: argparse.ArgumentParser):
     default_voltage = int(os.environ.get("PPK2_VOLTAGE", 5000))
     default_duration = float(os.environ.get("PPK2_DURATION", 10.0))
     default_mode = os.environ.get("PPK2_MODE", "source")
+    env_sps = os.environ.get("PPK2_SPS")
+    default_sps = int(env_sps) if env_sps and env_sps.isdigit() else None
 
     p.add_argument("-p", "--port", type=str, default=default_port,
                    help=f"Serial port (default: {default_port or 'Auto-probe'})")
@@ -121,10 +123,12 @@ def _add_measure_args(p: argparse.ArgumentParser):
                    help="Warm-up / delay time in seconds before sampling starts (DUT is powered). Default: 0.0")
     p.add_argument("-m", "--mode", choices=["source", "ampere"], default=default_mode,
                    help=f"Operating mode: 'source' (power DUT internally) or 'ampere'. Default: {default_mode}")
+    p.add_argument("--sps", "--sample-rate", type=int, default=default_sps,
+                   help="Target samples per second for export/arrays (e.g. 1000 for 1kHz, 10000 for 10kHz). Default: native 100,000 SPS")
+    p.add_argument("--no-live", action="store_true",
+                   help="Disable live real-time output stream during sampling")
     p.add_argument("--no-dut-power", action="store_true",
                    help="Do not toggle DUT power on in source mode")
-    p.add_argument("--summary-only", action="store_true",
-                   help="Print only overall summary instead of per-second breakdown table")
     p.add_argument("--mp", action="store_true",
                    help="Use multi-threaded background reader")
     p.add_argument("--csv", type=str, metavar="FILE.csv",
