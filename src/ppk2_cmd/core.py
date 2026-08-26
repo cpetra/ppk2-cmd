@@ -114,10 +114,10 @@ class PPK2Session:
             while (time.time() - t_wait_start) < wait_before_s:
                 w_elapsed = time.time() - t_wait_start
                 w_rem = max(0.0, wait_before_s - w_elapsed)
-                sys.stdout.write(f"\r  Warm-up: {w_elapsed:4.1f}s / {wait_before_s:4.1f}s (Remaining: {w_rem:4.1f}s)...")
+                sys.stdout.write(f"\r\033[2K  Warm-up: {w_elapsed:4.1f}s / {wait_before_s:4.1f}s (Remaining: {w_rem:4.1f}s)...")
                 sys.stdout.flush()
                 time.sleep(0.1)
-            sys.stdout.write("\r" + " " * 65 + "\r")
+            sys.stdout.write("\r\033[2K")
             sys.stdout.flush()
 
         rate_info = f"at target {target_sps:,} SPS" if target_sps else "at native ~100 kSPS"
@@ -165,8 +165,9 @@ class PPK2Session:
                             s_mean_ua = float(np.mean(sec_slice))
                             s_mean_ma = s_mean_ua / 1000.0
                             s_power_mw = s_mean_ma * (self.voltage_mv / 1000.0)
+                            # Clear entire line before printing completed second
                             sys.stdout.write(
-                                f"\r  [Second {s_num:2d} | t={s_num-1:2d}.0s-{s_num:2d}.0s]  "
+                                f"\r\033[2K  [Second {s_num:2d} | t={s_num-1:2d}.0s-{s_num:2d}.0s]  "
                                 f"{s_mean_ua:10.2f} µA  ({s_mean_ma:8.3f} mA)  |  {s_power_mw:8.3f} mW\n"
                             )
                             sys.stdout.flush()
@@ -180,7 +181,7 @@ class PPK2Session:
                     cur_power_mw = cur_mean_ma * (self.voltage_mv / 1000.0)
                     pct = min(1.0, cur_elapsed / duration_s) if duration_s > 0 else 1.0
                     sys.stdout.write(
-                        f"\r  -> [{cur_elapsed:4.1f}s / {duration_s:4.1f}s ({pct*100:4.1f}%)] "
+                        f"\r\033[2K  -> [{cur_elapsed:4.1f}s / {duration_s:4.1f}s ({pct*100:4.1f}%)] "
                         f"Live: {live_ma:7.3f} mA | Avg: {cur_mean_ma:7.3f} mA | {cur_power_mw:7.3f} mW | {cur_rate_sps/1000:5.1f} kSps"
                     )
                     sys.stdout.flush()
@@ -195,7 +196,7 @@ class PPK2Session:
         self.stop_measuring()
 
         # Clear active status line
-        sys.stdout.write("\r" + " " * 85 + "\r")
+        sys.stdout.write("\r\033[2K")
         sys.stdout.flush()
 
         raw_samples_ua = np.array(samples, dtype=np.float64)
