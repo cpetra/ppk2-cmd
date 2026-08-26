@@ -4,7 +4,7 @@ Data analysis, statistics, and result models for PPK2 measurements.
 
 import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional, List, Dict, Any
 import numpy as np
 
@@ -35,6 +35,7 @@ class MeasurementResult:
     max_ua: float
     std_ua: float
     avg_power_mw: float
+    start_time: Optional[str] = None
     digital_channels: Optional[List[List[int]]] = None
 
     def get_per_second_stats(self) -> List[SecondStats]:
@@ -77,6 +78,8 @@ class MeasurementResult:
         print("\n" + "=" * 55)
         print("            PPK2 MEASUREMENT SUMMARY")
         print("=" * 55)
+        if self.start_time:
+            print(f"Date & Time:       {self.start_time}")
         print(f"Total Samples:     {len(self.current_ua):,}")
         print(f"Actual Duration:   {self.duration_s:.2f} s")
         print(f"Sample Rate:       {self.sample_rate_sps:,.1f} samples/sec")
@@ -97,6 +100,8 @@ class MeasurementResult:
 
         print("\n" + "=" * 65)
         print(f"      PER-SECOND AVERAGE CURRENT & POWER ({self.voltage_mv/1000:.1f}V)")
+        if self.start_time:
+            print(f"      Start Time: {self.start_time}")
         print("=" * 65)
         for s in stats:
             print(f"  Second {s.second:2d} (t={s.t_start:4.1f}s - {s.t_end:4.1f}s):  "
@@ -108,7 +113,7 @@ class MeasurementResult:
     def save_csv(self, filename: str):
         """Save sample data to CSV file."""
         print(f"Saving {len(self.current_ua):,} samples to CSV: {filename}...")
-        header = "time_s,current_uA,current_mA"
+        header = f"time_s,current_uA,current_mA"
         data = np.column_stack((self.timestamps_s, self.current_ua, self.current_ma))
         np.savetxt(filename, data, delimiter=",", header=header, comments="", fmt="%.6f,%.3f,%.6f")
         print(f"  CSV saved successfully ({os.path.getsize(filename) / (1024*1024):.2f} MB).")
@@ -121,7 +126,8 @@ class MeasurementResult:
             time_s=self.timestamps_s,
             current_uA=self.current_ua,
             current_mA=self.current_ma,
-            voltage_mV=self.voltage_mv
+            voltage_mV=self.voltage_mv,
+            start_time=self.start_time or ""
         )
         print(f"  NPZ saved successfully ({os.path.getsize(filename) / (1024*1024):.2f} MB).")
 
@@ -129,6 +135,7 @@ class MeasurementResult:
         """Save measurement summary and per-second statistics to JSON."""
         print(f"Saving summary to JSON: {filename}...")
         payload = {
+            "start_time": self.start_time,
             "voltage_mv": self.voltage_mv,
             "duration_s": self.duration_s,
             "sample_rate_sps": self.sample_rate_sps,

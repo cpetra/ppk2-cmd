@@ -4,6 +4,7 @@ Core measurement session and acquisition engine for PPK2.
 
 import sys
 import time
+from datetime import datetime
 from typing import Optional, List
 import numpy as np
 from ppk2_api.ppk2_api import PPK2_API, PPK2_MP, PPK2_Command
@@ -122,7 +123,11 @@ class PPK2Session:
         if not self._ppk:
             raise RuntimeError("PPK2 is not connected.")
 
+        start_dt = datetime.now()
+        start_time_str = start_dt.strftime("%Y-%m-%d %H:%M:%S")
+
         if wait_before_s > 0:
+            print(f"Start Time:   {start_time_str}")
             print(f"Warm-up wait: {wait_before_s:.1f}s before sampling (DUT powered at {self.voltage_mv} mV)...")
             t_wait_start = time.time()
             while (time.time() - t_wait_start) < wait_before_s:
@@ -133,13 +138,15 @@ class PPK2Session:
                 time.sleep(0.1)
             sys.stdout.write("\r\033[2K")
             sys.stdout.flush()
+        else:
+            print(f"Start Time:   {start_time_str}")
 
         rate_info = f"at target {target_sps:,} SPS" if target_sps else "at native ~100 kSPS"
         print(f"Sampling for {_format_time(duration_s, show_ms=False)} ({rate_info})...\n")
 
         if live_stream:
             print("=" * 72)
-            print(f"  LIVE MEASUREMENTS ({self.voltage_mv/1000:.1f}V)")
+            print(f"  LIVE MEASUREMENTS ({self.voltage_mv/1000:.1f}V) - {start_time_str}")
             print("=" * 72)
 
         self._ppk.start_measuring()
@@ -257,6 +264,7 @@ class PPK2Session:
             max_ua=max_ua,
             std_ua=std_ua,
             avg_power_mw=avg_power_mw,
+            start_time=start_time_str,
             digital_channels=channels
         )
 
@@ -293,9 +301,15 @@ def generate_mock_measurement(
     target_sps: Optional[int] = None
 ) -> MeasurementResult:
     """Generate synthetic PPK2 measurement data for testing without hardware."""
+    start_dt = datetime.now()
+    start_time_str = start_dt.strftime("%Y-%m-%d %H:%M:%S")
+
     if wait_before_s > 0:
+        print(f"Start Time:   {start_time_str}")
         print(f"Waiting {wait_before_s:.1f}s before sampling (mock mode)...")
         time.sleep(min(1.0, wait_before_s))
+    else:
+        print(f"Start Time:   {start_time_str}")
 
     effective_sps = float(target_sps) if target_sps and target_sps < 100_000 else 100_000.0
     num_samples = int(duration_s * effective_sps)
@@ -326,7 +340,8 @@ def generate_mock_measurement(
         min_ua=min_ua,
         max_ua=max_ua,
         std_ua=std_ua,
-        avg_power_mw=avg_power_mw
+        avg_power_mw=avg_power_mw,
+        start_time=start_time_str
     )
 
 
