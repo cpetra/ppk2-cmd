@@ -190,7 +190,6 @@ class PPK2Session:
 
                 # Live in-place status line between second marks
                 if now - last_ui_update >= 0.08:
-                    cur_rate_sps = len(samples) / cur_elapsed if cur_elapsed > 0 else 0.0
                     cur_mean_ma = (sum(samples) / len(samples) / 1000.0) if samples else 0.0
                     cur_power_mw = cur_mean_ma * (self.voltage_mv / 1000.0)
                     pct = min(1.0, cur_elapsed / duration_s) if duration_s > 0 else 1.0
@@ -199,7 +198,7 @@ class PPK2Session:
                     
                     sys.stdout.write(
                         f"\r\033[2K  -> [{t_cur_str} / {t_tot_str} ({pct*100:4.1f}%)] "
-                        f"Live: {live_ma:7.3f} mA | Avg: {cur_mean_ma:7.3f} mA | {cur_power_mw:7.3f} mW | {cur_rate_sps/1000:5.1f} kSps"
+                        f"Live: {live_ma:7.3f} mA | Avg: {cur_mean_ma:7.3f} mA | {cur_power_mw:7.3f} mW"
                     )
                     sys.stdout.flush()
                     last_ui_update = now
