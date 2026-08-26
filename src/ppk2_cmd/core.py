@@ -41,6 +41,20 @@ def downsample_array(arr: np.ndarray, target_sps: int, native_sps: float) -> np.
     return arr[:trim_len].reshape(-1, factor).mean(axis=1)
 
 
+def _format_time(seconds: float, show_ms: bool = True) -> str:
+    """Format seconds into human-readable string (mm:ss.s or ss.ss)."""
+    if seconds >= 60:
+        mins = int(seconds // 60)
+        secs = seconds % 60
+        if show_ms:
+            return f"{mins:02d}:{secs:04.1f}"
+        return f"{mins:02d}:{int(secs):02d}"
+    else:
+        if show_ms:
+            return f"{seconds:4.1f}s"
+        return f"{int(seconds):2d}s"
+
+
 class PPK2Session:
     """
     Manages a connected PPK2 device session with context manager support.
@@ -114,19 +128,19 @@ class PPK2Session:
             while (time.time() - t_wait_start) < wait_before_s:
                 w_elapsed = time.time() - t_wait_start
                 w_rem = max(0.0, wait_before_s - w_elapsed)
-                sys.stdout.write(f"\r\033[2K  Warm-up: {w_elapsed:4.1f}s / {wait_before_s:4.1f}s (Remaining: {w_rem:4.1f}s)...")
+                sys.stdout.write(f"\r\033[2K  Warm-up: {_format_time(w_elapsed)} / {_format_time(wait_before_s)} (Remaining: {_format_time(w_rem)})...")
                 sys.stdout.flush()
                 time.sleep(0.1)
             sys.stdout.write("\r\033[2K")
             sys.stdout.flush()
 
         rate_info = f"at target {target_sps:,} SPS" if target_sps else "at native ~100 kSPS"
-        print(f"Sampling for {duration_s:.1f} seconds ({rate_info})...\n")
+        print(f"Sampling for {_format_time(duration_s, show_ms=False)} ({rate_info})...\n")
 
         if live_stream:
-            print("=" * 70)
+            print("=" * 72)
             print(f"  LIVE MEASUREMENTS ({self.voltage_mv/1000:.1f}V)")
-            print("=" * 70)
+            print("=" * 72)
 
         self._ppk.start_measuring()
         self._measuring = True
@@ -165,9 +179,9 @@ class PPK2Session:
                             s_mean_ua = float(np.mean(sec_slice))
                             s_mean_ma = s_mean_ua / 1000.0
                             s_power_mw = s_mean_ma * (self.voltage_mv / 1000.0)
-                            # Clear entire line before printing completed second
+                            # Wipe line clean and print permanent second milestone
                             sys.stdout.write(
-                                f"\r\033[2K  [Second {s_num:2d} | t={s_num-1:2d}.0s-{s_num:2d}.0s]  "
+                                f"\r\033[2K  [Second {s_num:3d} | t={s_num-1:3d}.0s-{s_num:3d}.0s]  "
                                 f"{s_mean_ua:10.2f} µA  ({s_mean_ma:8.3f} mA)  |  {s_power_mw:8.3f} mW\n"
                             )
                             sys.stdout.flush()
@@ -180,8 +194,11 @@ class PPK2Session:
                     cur_mean_ma = (sum(samples) / len(samples) / 1000.0) if samples else 0.0
                     cur_power_mw = cur_mean_ma * (self.voltage_mv / 1000.0)
                     pct = min(1.0, cur_elapsed / duration_s) if duration_s > 0 else 1.0
+                    t_cur_str = _format_time(cur_elapsed)
+                    t_tot_str = _format_time(duration_s)
+                    
                     sys.stdout.write(
-                        f"\r\033[2K  -> [{cur_elapsed:4.1f}s / {duration_s:4.1f}s ({pct*100:4.1f}%)] "
+                        f"\r\033[2K  -> [{t_cur_str} / {t_tot_str} ({pct*100:4.1f}%)] "
                         f"Live: {live_ma:7.3f} mA | Avg: {cur_mean_ma:7.3f} mA | {cur_power_mw:7.3f} mW | {cur_rate_sps/1000:5.1f} kSps"
                     )
                     sys.stdout.flush()
@@ -190,7 +207,10 @@ class PPK2Session:
                 time.sleep(0.005)
 
         except KeyboardInterrupt:
-            print("\n\n  [!] Measurement interrupted by user (Ctrl+C). Processing captured samples...")
+            # Wipe ticker cleanly before printing Ctrl+C notice
+            sys.stdout.write("\r\033[2K")
+            sys.stdout.flush()
+            print("  [!] Measurement stopped early by user (Ctrl+C). Finalizing collected samples...")
 
         elapsed = time.time() - start_time
         self.stop_measuring()
